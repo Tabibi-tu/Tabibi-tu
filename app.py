@@ -209,7 +209,7 @@ if st.session_state.current_view == 'home':
 # ==========================================
 # 4. القائمة الجانبية (ركن المطور فقط)
 # ==========================================
-with st.sidebar:
+with st.expander("⚙️ ركن المطور وإعدادات العيادة (SaaS)", expanded=False):
     st.markdown(t("### ⚙️ ركن المطور (SaaS)", "### ⚙️ Espace Développeur (SaaS)"))
     st.info(t("مفتوح لتسهيل العرض. سيتم إغلاقه لاحقاً.", "Ouvert pour la démo. Sera sécurisé plus tard."))
     with st.form("saas_admin_form"):
