@@ -68,7 +68,7 @@ def inject_custom_pwa(icon_path, app_name):
         pass
 
 inject_custom_pwa("icon.png", "طبيبي د. | Mon Médecin Dr.")
-)
+
 
 # تهيئة المتغيرات الأساسية والتنقلات الفرعية
 if 'current_view' not in st.session_state:
