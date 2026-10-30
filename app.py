@@ -8,7 +8,7 @@ import pandas as pd
 # ==========================================
 st.set_page_config(
     page_title="طبيبي د. | Mon Médecin Dr.",
-    page_icon="🩺",
+    page_icon="icon.png",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
