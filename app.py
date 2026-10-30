@@ -207,34 +207,6 @@ if st.session_state.current_view == 'home':
 
 
 # ==========================================
-# 4. القائمة الجانبية (ركن المطور فقط)
-# ==========================================
-with st.expander("⚙️ ركن المطور وإعدادات العيادة (SaaS)", expanded=False):
-    st.markdown(t("### ⚙️ ركن المطور (SaaS)", "### ⚙️ Espace Développeur (SaaS)"))
-    st.info(t("مفتوح لتسهيل العرض. سيتم إغلاقه لاحقاً.", "Ouvert pour la démo. Sera sécurisé plus tard."))
-    with st.form("saas_admin_form"):
-        st.subheader(t("إعدادات وهوية العيادة", "Identité de la clinique"))
-        new_doc_name = st.text_input(t("اسم الطبيب:", "Nom du médecin:"), value=settings['doctor_name'])
-        new_specialty = st.text_input(t("الاختصاص:", "Spécialité:"), value=settings['specialty'])
-        new_phone = st.text_input(t("رقم هاتف العيادة:", "Téléphone:"), value=settings['phone'])
-        st.subheader(t("💰 حالة الاشتراك", "💰 Abonnement"))
-        sub_status = st.selectbox(t("حالة الاشتراك:", "Statut:"), [1, 0], index=0 if settings['subscription_active']==1 else 1, format_func=lambda x: t("✅ مفعّل", "✅ Actif") if x==1 else t("⛔ موقوف", "⛔ Suspendu"))
-        if st.form_submit_button(t("💾 حفظ الهوية", "💾 Enregistrer"), type="primary"):
-            conn = get_connection()
-            conn.execute('''UPDATE clinic_settings SET doctor_name=?, specialty=?, phone=?, subscription_active=? WHERE id=1''', (new_doc_name, new_specialty, new_phone, sub_status))
-            conn.commit(); conn.close(); st.rerun()
-            
-    st.divider()
-    st.markdown(t("#### 🔒 إعادة ضبط رموز المرور", "#### 🔒 Réinitialisation des mots de passe"))
-    if st.button(t("🔄 إعادة ضبط الرموز لـ 0000", "🔄 Réinitialiser à 0000")):
-        conn = get_connection()
-        conn.execute("UPDATE clinic_settings SET sec_pwd='0000', doc_pwd='0000' WHERE id=1")
-        conn.commit(); conn.close()
-        st.session_state.sec_auth = False
-        st.session_state.doc_auth = False
-        st.success(t("تمت إعادة ضبط الرموز لـ 0000 بنجاح.", "Mots de passe réinitialisés à 0000 avec succès."))
-
-# ==========================================
 # الهيدر الموحد لجميع الشاشات
 # ==========================================
 doc_clean_name = settings['doctor_name'].replace('د.', '').replace('الدكتور', '').replace('Dr.', '').strip()
@@ -263,7 +235,7 @@ if st.session_state.current_view != 'home':
 if st.session_state.current_view == 'home':
     col_welcome, col_lang = st.columns([4, 1])
     with col_welcome:
-        st.markdown(t("<h3 style='color:#334155; margin-top:5px;'>مرحباً بك، يرجى اختيار صفتك للدخول:</h3>", "<h3 style='color:#334155; margin-top:5px;'>Bienvenue, veuillez sélectionner votre accès :</h3>"), unsafe_allow_html=True)
+        st.markdown(t("<h3 style='text-align: center; color:#334155; margin-top:5px;'>مرحباً بك، يرجى اختيار صفتك للدخول:</h3>", "<h3 style='text-align: center; color:#334155; margin-top:5px;'>Bienvenue, veuillez sélectionner votre accès :</h3>"), unsafe_allow_html=True)
     with col_lang:
         selected_lang = st.selectbox("🌐", ["العربية", "Français"], index=0 if st.session_state.lang == 'ar' else 1, label_visibility="collapsed")
         new_lang = 'ar' if selected_lang == "العربية" else 'fr'
@@ -275,14 +247,14 @@ if st.session_state.current_view == 'home':
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        btn_patient = t("📱\n\nالمريض / الحريف\n\nحجز موعد، تتبع الطابور\nومعاينة الوصفات الخاصة بك.", "📱\n\nPatient / Client\n\nRéserver, suivre la file\net voir vos ordonnances.")
+        btn_patient = t("📱\n\nالمريض / الحريف\n\nحجز موعد، تتبع الصف أو الدور\nومعاينة الوصفات الخاصة بك.", "📱\n\nPatient / Client\n\nRéserver, suivre la file\net voir vos ordonnances.")
         if st.button(btn_patient, use_container_width=True):
             st.session_state.current_view = 'patient'
             st.session_state.patient_subview = 'book' # افتراضياً يفتح على حجز موعد
             st.rerun()
 
     with col2:
-        btn_sec = t("👩‍💻\n\nالكاتبة / الاستقبال\n\nإدارة الطابور وإدخال المرضى\nلقاعة الفحص (محمي برمز).", "👩‍💻\n\nSecrétaire / Accueil\n\nGérer la file d'attente\net l'accès (Protégé).")
+        btn_sec = t("👩‍💻\n\nالكاتبة / الاستقبال\n\nإدارة الصف أو الدور وإدخال المرضى\nلقاعة الفحص (محمي برمز).", "👩‍💻\n\nSecrétaire / Accueil\n\nGérer la file d'attente\net l'accès (Protégé).")
         if st.button(btn_sec, use_container_width=True):
             st.session_state.current_view = 'secretary'
             st.rerun()
@@ -523,3 +495,31 @@ elif st.session_state.current_view == 'doctor':
                     conn.close()
                     st.success(t("✅ تم تحديث إعدادات العيادة بنجاح!", "✅ Paramètres mis à jour avec succès !"))
                     st.rerun()
+
+# ==========================================
+# 4. القائمة التوسيعية (ركن المطور فقط) - تم نقلها للأسفل
+# ==========================================
+with st.expander("⚙️ ركن المطور وإعدادات العيادة (SaaS)", expanded=False):
+    st.markdown(t("### ⚙️ ركن المطور (SaaS)", "### ⚙️ Espace Développeur (SaaS)"))
+    st.info(t("مفتوح لتسهيل العرض. سيتم إغلاقه لاحقاً.", "Ouvert pour la démo. Sera sécurisé plus tard."))
+    with st.form("saas_admin_form"):
+        st.subheader(t("إعدادات وهوية العيادة", "Identité de la clinique"))
+        new_doc_name = st.text_input(t("اسم الطبيب:", "Nom du médecin:"), value=settings['doctor_name'])
+        new_specialty = st.text_input(t("الاختصاص:", "Spécialité:"), value=settings['specialty'])
+        new_phone = st.text_input(t("رقم هاتف العيادة:", "Téléphone:"), value=settings['phone'])
+        st.subheader(t("💰 حالة الاشتراك", "💰 Abonnement"))
+        sub_status = st.selectbox(t("حالة الاشتراك:", "Statut:"), [1, 0], index=0 if settings['subscription_active']==1 else 1, format_func=lambda x: t("✅ مفعّل", "✅ Actif") if x==1 else t("⛔ موقوف", "⛔ Suspendu"))
+        if st.form_submit_button(t("💾 حفظ الهوية", "💾 Enregistrer"), type="primary"):
+            conn = get_connection()
+            conn.execute('''UPDATE clinic_settings SET doctor_name=?, specialty=?, phone=?, subscription_active=? WHERE id=1''', (new_doc_name, new_specialty, new_phone, sub_status))
+            conn.commit(); conn.close(); st.rerun()
+            
+    st.divider()
+    st.markdown(t("#### 🔒 إعادة ضبط رموز المرور", "#### 🔒 Réinitialisation des mots de passe"))
+    if st.button(t("🔄 إعادة ضبط الرموز لـ 0000", "🔄 Réinitialiser à 0000")):
+        conn = get_connection()
+        conn.execute("UPDATE clinic_settings SET sec_pwd='0000', doc_pwd='0000' WHERE id=1")
+        conn.commit(); conn.close()
+        st.session_state.sec_auth = False
+        st.session_state.doc_auth = False
+        st.success(t("تمت إعادة ضبط الرموز لـ 0000 بنجاح.", "Mots de passe réinitialisés à 0000 avec succès."))
