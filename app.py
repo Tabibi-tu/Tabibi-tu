@@ -2,15 +2,72 @@ import streamlit as st
 import sqlite3
 from datetime import datetime, date, timedelta
 import pandas as pd
+import streamlit.components.v1 as components
+import base64
 
 # ==========================================
-# 1. إعدادات الصفحة و Session State
+# 1. إعدادات الصفحة و PWA Override
 # ==========================================
 st.set_page_config(
     page_title="طبيبي د. | Mon Médecin Dr.",
     page_icon="icon.png",
     layout="wide",
     initial_sidebar_state="collapsed"
+)
+
+# دالة لحرْق الأيقونة والاسم المزيف لكسر قيود Streamlit
+def inject_custom_pwa(icon_path, app_name):
+    try:
+        with open(icon_path, "rb") as image_file:
+            encoded_icon = base64.b64encode(image_file.read()).decode()
+        
+        manifest_data = f"""{{
+            "name": "{app_name}",
+            "short_name": "{app_name}",
+            "start_url": ".",
+            "display": "standalone",
+            "background_color": "#ffffff",
+            "theme_color": "#0d9488",
+            "icons": [
+                {{
+                    "src": "data:image/png;base64,{encoded_icon}",
+                    "sizes": "192x192",
+                    "type": "image/png"
+                }},
+                {{
+                    "src": "data:image/png;base64,{encoded_icon}",
+                    "sizes": "512x512",
+                    "type": "image/png"
+                }}
+            ]
+        }}"""
+        b64_manifest = base64.b64encode(manifest_data.encode('utf-8')).decode('utf-8')
+        
+        js_code = f"""
+        <script>
+            try {{
+                const parentDoc = window.parent.document;
+                const head = parentDoc.querySelector('head');
+                parentDoc.title = "{app_name}";
+                parentDoc.querySelectorAll('link[rel="manifest"], link[rel="apple-touch-icon"], link[rel="shortcut icon"]').forEach(el => el.remove());
+                
+                const appleIcon = parentDoc.createElement('link');
+                appleIcon.rel = 'apple-touch-icon';
+                appleIcon.href = 'data:image/png;base64,{encoded_icon}';
+                head.appendChild(appleIcon);
+                
+                const manifestLink = parentDoc.createElement('link');
+                manifestLink.rel = 'manifest';
+                manifestLink.href = 'data:application/manifest+json;base64,{b64_manifest}';
+                head.appendChild(manifestLink);
+            }} catch (e) {{}}
+        </script>
+        """
+        components.html(js_code, height=0, width=0)
+    except Exception as e:
+        pass
+
+inject_custom_pwa("icon.png", "طبيبي د. | Mon Médecin Dr.")
 )
 
 # تهيئة المتغيرات الأساسية والتنقلات الفرعية
