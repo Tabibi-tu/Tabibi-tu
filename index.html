@@ -4,14 +4,42 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>طبيبي د. | Mon Médecin Dr.</title>
+    <!-- الأيقونة الخاصة بالتطبيق عند التثبيت -->
     <link rel="apple-touch-icon" href="icon.png">
     <link rel="icon" type="image/png" href="icon.png">
+    
     <style>
-        body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #0f172a; }
-        iframe { width: 100%; height: 100%; border: none; }
+        body {
+            background-color: #0f172a;
+            color: white;
+            font-family: 'Cairo', sans-serif;
+            text-align: center;
+            padding-top: 50px;
+        }
+        .btn {
+            display: inline-block;
+            margin-top: 20px;
+            padding: 15px 30px;
+            background: linear-gradient(135deg, #0d9488, #0f766e);
+            color: white;
+            text-decoration: none;
+            border-radius: 12px;
+            font-weight: bold;
+            font-size: 1.2rem;
+            box-shadow: 0 4px 15px rgba(13,148,136,0.4);
+        }
     </style>
 </head>
 <body>
-    <iframe src="https://dr-tabibi.streamlit.app"></iframe>
+    <h2>🩺 طبيبي د. | Mon Médecin Dr.</h2>
+    <p>جارٍ تحويلك إلى النظام الرقمي للعيادة...</p>
+    <a href="https://dr-tabibi.streamlit.app" class="btn">اضغط هنا للدخول للعيادة فوراً</a>
+
+    <script>
+        // توجيه تلقائي بعد ثانية واحدة
+        setTimeout(function() {
+            window.location.href = "https://dr-tabibi.streamlit.app";
+        }, 1000);
+    </script>
 </body>
 </html>
