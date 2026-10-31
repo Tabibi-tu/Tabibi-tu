@@ -14,32 +14,54 @@
             color: white;
             font-family: 'Cairo', sans-serif;
             text-align: center;
-            padding-top: 50px;
+            padding-top: 60px;
+            padding-left: 20px;
+            padding-right: 20px;
+        }
+        .logo {
+            width: 90px;
+            height: 90px;
+            border-radius: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+        }
+        h2 {
+            margin-bottom: 10px;
+            font-size: 1.5rem;
+        }
+        p {
+            color: #94a3b8;
+            font-size: 1rem;
+            margin-bottom: 30px;
         }
         .btn {
             display: inline-block;
-            margin-top: 20px;
-            padding: 15px 30px;
+            padding: 15px 35px;
             background: linear-gradient(135deg, #0d9488, #0f766e);
             color: white;
             text-decoration: none;
             border-radius: 12px;
             font-weight: bold;
-            font-size: 1.2rem;
+            font-size: 1.1rem;
             box-shadow: 0 4px 15px rgba(13,148,136,0.4);
+        }
+        .hint {
+            margin-top: 40px;
+            font-size: 0.85rem;
+            color: #64748b;
         }
     </style>
 </head>
 <body>
-    <h2>🩺 طبيبي د. | Mon Médecin Dr.</h2>
-    <p>جارٍ تحويلك إلى النظام الرقمي للعيادة...</p>
-    <a href="https://dr-tabibi.streamlit.app" class="btn">اضغط هنا للدخول للعيادة فوراً</a>
+    <img src="icon.png" alt="Logo" class="logo">
+    <h2>طبيبي د. | Mon Médecin Dr.</h2>
+    <p>النظام الرقمي لإدارة العيادات الطبية ومتابعة الصف</p>
+    
+    <!-- زر الانتقال الحصري - لن ينتقل إلا إذا ضغط المستخدم هنا -->
+    <a href="https://dr-tabibi.streamlit.app" class="btn">دخول العيادة الرقمية 🩺</a>
 
-    <script>
-        // توجيه تلقائي بعد ثانية واحدة
-        setTimeout(function() {
-            window.location.href = "https://dr-tabibi.streamlit.app";
-        }, 1000);
-    </script>
+    <div class="hint">
+        💡 نصيحة: للحصول على التطبيق على هاتفك، اضغط على النقاط الثلاث في المتصفح واختر <b>"الإضافة إلى الشاشة الرئيسية"</b> قبل الدخول.
+    </div>
 </body>
 </html>
