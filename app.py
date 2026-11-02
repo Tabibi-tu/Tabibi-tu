@@ -253,13 +253,49 @@ elif st.session_state.current_view == 'patient':
             st.markdown(t("#### ⏳ وقت الانتظار التقريبي", "#### ⏳ Temps d'attente estimé"))
             my_t = st.number_input(t("أدخل رقم تذكرتك:", "Votre numéro de ticket :"), min_value=1, value=current_num+1, key="patient_ticket_input")
             if my_t == current_num: 
-                st.success(t("دورك الآن! تفضل بالدخول.", "C'est votre tour ! Veuillez entrer."))
+                st.markdown(f"""
+                <div style="background: #ecfdf5; border: 2px solid #10b981; border-radius: 14px; padding: 16px; text-align: center; margin-top: 10px;">
+                    <div style="font-size: 1.3rem; font-weight: 800; color: #065f46;">
+                        🎉 {t("دورك الآن! تفضل بالدخول إلى قاعة الفحص", "C'est votre tour ! Veuillez entrer.")}
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
             elif my_t > current_num: 
-                wait_mins = (my_t - current_num) * int(settings['slot_minutes'])
+                diff = my_t - current_num
+                wait_mins = diff * int(settings['slot_minutes'])
                 formatted_time = format_wait_time(wait_mins)
-                st.info(t(f"بقي أمامك {my_t - current_num} مرضى.<br><b>المتبقي تقريباً: {formatted_time}</b>", f"Il y a {my_t - current_num} patients avant vous.<br><b>Reste environ: {formatted_time}</b>"))
+                
+                if diff == 1:
+                    patients_txt = t("مريض واحد فقط", "1 seul patient")
+                elif diff == 2:
+                    patients_txt = t("مريضان (2)", "2 patients")
+                elif 3 <= diff <= 10:
+                    patients_txt = t(f"{diff} مرضى", f"{diff} patients")
+                else:
+                    patients_txt = t(f"{diff} مريضاً", f"{diff} patients")
+
+                st.markdown(f"""
+                <div style="background: linear-gradient(135deg, #f0fdfa, #f8fafc); border: 2px solid #0d9488; border-radius: 14px; padding: 18px; margin-top: 10px; box-shadow: 0 4px 12px rgba(13,148,136,0.08); text-align: center;">
+                    <div style="font-size: 1.1rem; color: #1e293b; margin-bottom: 8px;">
+                        👥 {t("أمامك في الطابور:", "Devant vous :")} 
+                        <span style="background: #ccfbf1; color: #0f766e; padding: 4px 12px; border-radius: 8px; font-weight: 800; font-size: 1.15rem;">
+                            {patients_txt}
+                        </span>
+                    </div>
+                    <div style="font-size: 1.25rem; font-weight: 800; color: #0f766e; margin-top: 8px;">
+                        ⏳ {t("الوقت التقديري المتبقي:", "Temps estimé :")} 
+                        <span style="color: #0d9488;">{formatted_time}</span>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
             else:
-                st.warning(t("لقد مر دورك.", "Votre tour est passé."))
+                st.markdown(f"""
+                <div style="background: #fffbeb; border: 2px solid #f59e0b; border-radius: 14px; padding: 14px; text-align: center; margin-top: 10px;">
+                    <div style="font-size: 1.05rem; font-weight: 700; color: #92400e;">
+                        ⚠️ {t("لقد مر دور هذه التذكرة. يرجى مراجعة الاستقبال.", "Votre tour est passé. Veuillez consulter l'accueil.")}
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
 
     live_queue_box()
     st.divider()
