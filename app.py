@@ -98,10 +98,10 @@ def format_wait_time(minutes):
         return res.strip()
 
 def generate_short_code():
-    # رمز بسيط جداً: حرف واحد + 3 أرقام (مثال: C-592)
+    # رمز بسيط جداً: حرف فرنسي واحد + رقمان (مثال: C59)
     letter = random.choice(string.ascii_uppercase)
-    nums = ''.join(random.choices(string.digits, k=3))
-    return f"{letter}-{nums}"
+    nums = ''.join(random.choices(string.digits, k=2))
+    return f"{letter}{nums}"
 
 # ==========================================
 # 2. قاعدة البيانات المحسنة والآمنة
