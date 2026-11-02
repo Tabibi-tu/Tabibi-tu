@@ -98,7 +98,10 @@ def format_wait_time(minutes):
         return res.strip()
 
 def generate_short_code():
-    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=5))
+    # رمز بسيط جداً: حرف واحد + 3 أرقام (مثال: C-592)
+    letter = random.choice(string.ascii_uppercase)
+    nums = ''.join(random.choices(string.digits, k=3))
+    return f"{letter}-{nums}"
 
 # ==========================================
 # 2. قاعدة البيانات المحسنة والآمنة
@@ -303,6 +306,19 @@ def get_booked_slots(target_date):
     except Exception:
         return []
 
+def get_first_available_date(start_date, work_start, work_end, slot_minutes):
+    """دالة ذكية للبحث عن أقرب يوم يحتوي على أوقات فارغة للحجز"""
+    candidate_date = start_date
+    for _ in range(14): # يبحث في الأسبوعين القادمين كحد أقصى
+        if candidate_date.weekday() in get_working_days_list():
+            all_slots = generate_time_slots(work_start, work_end, slot_minutes, candidate_date)
+            booked_set = set(get_booked_slots(candidate_date.isoformat()))
+            avail_slots = [s for s in all_slots if s not in booked_set]
+            if avail_slots:
+                return candidate_date # وجد يوم فيه أوقات فارغة
+        candidate_date += timedelta(days=1)
+    return start_date # إذا كانت كل الأيام ممتلئة يرجع لليوم الافتراضي
+
 def recalculate_tickets(target_date):
     try:
         df = read_df("SELECT id, appointment_time FROM appointments WHERE appointment_date = ? AND status NOT IN ('ملغى', 'طلب استعجالي', 'مكتمل') ORDER BY appointment_time ASC, id ASC", (target_date,))
@@ -456,8 +472,8 @@ elif st.session_state.current_view == 'patient':
             """, unsafe_allow_html=True)
             
         with col_q2:
-            st.markdown(t("#### ⏳ وقت الانتظار التقريبي (برمز الموعد)", "#### ⏳ Temps d'attente estimé"))
-            my_code = st.text_input(t("أدخل رمز موعدك السري (مثال A-1234):", "Code de rendez-vous :"), key="patient_code_input").strip().upper()
+            st.markdown(t("#### ⏳ وقت الانتظار التقريبي", "#### ⏳ Temps d'attente estimé"))
+            my_code = st.text_input(t("أدخل رمز موعدك (مثال C-592):", "Code de rendez-vous :"), key="patient_code_input").strip().upper()
             
             if my_code:
                 my_row = read_df("SELECT * FROM appointments WHERE appointment_date = ? AND app_code = ?", (today_str, my_code))
@@ -508,22 +524,29 @@ elif st.session_state.current_view == 'patient':
     st.write("")
 
     if st.session_state.patient_subview == 'book':
+        work_start = settings.get('work_start','09:00')
+        work_end = settings.get('work_end','16:00')
+        slot_mins = int(settings.get('slot_minutes', 20))
+        
         work_days_list = get_working_days_list()
         work_days_names = [DAYS_AR[d] if st.session_state.lang == 'ar' else DAYS_FR[d] for d in work_days_list]
-        st.caption(t(f"🗓️ أيام عمل العيادة: {' ، '.join(work_days_names)} (من {settings.get('work_start','09:00')} إلى {settings.get('work_end','16:00')})", f"🗓️ Jours d'ouverture : {', '.join(work_days_names)}"))
+        st.caption(t(f"🗓️ أيام عمل العيادة: {' ، '.join(work_days_names)} (من {work_start} إلى {work_end})", f"🗓️ Jours d'ouverture : {', '.join(work_days_names)}"))
+        
+        # دالة البحث الذكي عن أول يوم شاغر تلقائياً
+        suggested_date = get_first_available_date(get_tunis_date(), work_start, work_end, slot_mins)
         
         c1, c2 = st.columns(2)
         with c1:
-            sel_date = st.date_input(t("اختر تاريخ الموعد:", "Date du rendez-vous :"), min_value=get_tunis_date())
+            sel_date = st.date_input(t("اختر تاريخ الموعد:", "Date du rendez-vous :"), value=suggested_date, min_value=get_tunis_date())
             is_work_day = sel_date.weekday() in work_days_list
             if not is_work_day:
                 st.error(t("⚠️ العيادة مغلقة في هذا اليوم. يرجى اختيار يوم آخر من أيام العمل.", "⚠️ La clinique est fermée ce jour-là."))
                 avail_slots = []
             else:
                 booked_set = set(get_booked_slots(sel_date.isoformat()))
-                avail_slots = [s for s in generate_time_slots(settings.get('work_start','09:00'), settings.get('work_end','16:00'), int(settings.get('slot_minutes', 20)), sel_date) if s not in booked_set]
+                avail_slots = [s for s in generate_time_slots(work_start, work_end, slot_mins, sel_date) if s not in booked_set]
                 if not avail_slots:
-                    st.warning(t("لا توجد أوقات متاحة في هذا اليوم.", "Aucun horaire disponible pour ce jour."))
+                    st.warning(t("لا توجد أوقات متاحة في هذا اليوم، يرجى اختيار يوم موالي.", "Aucun horaire disponible pour ce jour, choisissez un autre."))
             sel_time = st.selectbox(t("الوقت المتاح:", "Heure disponible :"), avail_slots) if avail_slots else None
             
             visit_reasons = [
@@ -541,22 +564,22 @@ elif st.session_state.current_view == 'patient':
             
             if st.button(t("✅ تأكيد الحجز", "✅ Confirmer le rendez-vous"), type="primary", use_container_width=True):
                 if is_work_day and sel_time and p_n.strip() and p_p.strip():
-                    new_code = generate_short_code()
+                    new_code = generate_short_code() # توليد الرمز البسيط الجديد
                     try:
                         execute_query('''INSERT INTO appointments 
                             (patient_name, patient_phone, appointment_date, appointment_time, ticket_number, status, visit_type, visit_reason, app_code, created_at) 
                             VALUES (?, ?, ?, ?, 0, 'في الانتظار', 'موعد مسبق', ?, ?, ?)''',
                             (p_n.strip(), p_p.strip(), sel_date.isoformat(), sel_time, sel_reason, new_code, get_tunis_time().strftime("%Y-%m-%d %H:%M")))
                         recalculate_tickets(sel_date.isoformat())
-                        st.success(t(f"✅ تم الحجز بنجاح! رمز التتبع الخاص بك هو: {new_code}", f"✅ Réservé ! Code de suivi: {new_code}"))
-                        st.info(t("يرجى الاحتفاظ بهذا الرمز لتتبع دورك في الطابور عبر التطبيق.", "Gardez ce code pour suivre votre tour."))
+                        st.success(t(f"✅ تم الحجز بنجاح! رمزك السري هو: {new_code}", f"✅ Réservé ! Code de suivi: {new_code}"))
+                        st.info(t("يرجى الاحتفاظ بهذا الرمز (حرف وثلاثة أرقام) لتتبع دورك في الطابور عبر التطبيق.", "Gardez ce code pour suivre votre tour."))
                     except Exception as e:
                         if "unique" in str(e).lower():
                             st.error(t("عذراً، هذا الموعد حجز للتو. يرجى اختيار وقت آخر.", "Désolé, cet horaire vient d'être réservé."))
                         else:
                             st.error(t("حدث خطأ تقني أثناء الحجز، يرجى المحاولة من جديد.", "Erreur technique, réessayez."))
                 else:
-                    st.warning(t("يرجى التأكد من اختيار يوم عمل، وقت متاح، وإدخال الاسم ورقم الهاتف.", "Veuillez remplir tous les champs obligatoires."))
+                    st.warning(t("يرجى التأكد من اختيار يوم، وقت متاح، وإدخال الاسم ورقم الهاتف.", "Veuillez remplir tous les champs obligatoires."))
 
     elif st.session_state.patient_subview == 'urgent':
         st.markdown(t("#### 🚨 طلب موعد استعجالي (خارج المواعيد العادية)", "#### 🚨 Demande de rendez-vous urgent"))
@@ -598,7 +621,7 @@ elif st.session_state.current_view == 'patient':
                     st.markdown(t("##### 📅 حالة مواعيدك وطلباتك الأخيرة:", "##### 📅 Statut de vos rendez-vous :"))
                     for _, a_row in app_df.iterrows():
                         st_badge = a_row['status']
-                        code_txt = f"رمز التتبع: {a_row['app_code']}" if a_row['app_code'] else ""
+                        code_txt = f"الرمز: {a_row['app_code']}" if a_row['app_code'] else ""
                         safe_p_name = html.escape(str(a_row['patient_name']))
                         st.info(f"👤 **{safe_p_name}** | 📅 التاريخ: **{a_row['appointment_date']}** ({a_row['appointment_time']}) | 📌 الحالة: **{st_badge}** | {code_txt}")
                 
@@ -653,7 +676,7 @@ elif st.session_state.current_view == 'secretary':
             try:
                 execute_query("UPDATE clinic_settings SET current_ticket = 0, last_reset_date = ? WHERE id = 1", (today_str,))
             except Exception:
-                pass
+                execute_query("UPDATE clinic_settings SET current_ticket = 0 WHERE id = 1")
             settings['current_ticket'] = 0
             settings['last_reset_date'] = today_str
             
@@ -820,7 +843,7 @@ elif st.session_state.current_view == 'doctor':
                             
                         st.success(t("✅ تم حفظ الملف الطبي للمريض بنجاح!", "✅ Dossier enregistré avec succès !"))
                     else:
-                        st.error(t("الاسم ورقم الهاتف ضروريان لحفظ الملف.", "Le nom et le téléphone sont obligatoires."))
+                        st.error(t("الاسم ورقم الهاتف ضروريان לחفظ الملف.", "Le nom et le téléphone sont obligatoires."))
             
             st.markdown("---")
             if d_n and d_rx.strip():
