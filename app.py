@@ -387,8 +387,12 @@ elif st.session_state.current_view == 'secretary':
         waiting = today_df[today_df['status'] == 'في الانتظار']
         
         m1, m2, m3 = st.columns(3)
-        m1.metric(t("🟢 في الفحص الآن", "🟢 En consultation"), f"#{in_exam.iloc[0]['ticket_number']} - {in_exam.iloc[0]['patient_name']}" if not in_exam.empty else t("لا أحد", "Aucun"))
-        m2.metric(t("🟡 القادم في الصف", "🟡 Prochain patient"), f"#{waiting.iloc[0]['ticket_number']} - {waiting.iloc[0]['patient_name']}" if not waiting.empty else t("فارغ", "Vide"))
+        # تعديل هنا: التأكد من وجود بيانات قبل طلب .iloc[0]
+        current_patient_display = f"#{in_exam.iloc[0]['ticket_number']} - {in_exam.iloc[0]['patient_name']}" if not in_exam.empty else t("لا أحد", "Aucun")
+        next_patient_display = f"#{waiting.iloc[0]['ticket_number']} - {waiting.iloc[0]['patient_name']}" if not waiting.empty else t("فارغ", "Vide")
+        
+        m1.metric(t("🟢 في الفحص الآن", "🟢 En consultation"), current_patient_display)
+        m2.metric(t("🟡 القادم في الصف", "🟡 Prochain patient"), next_patient_display)
         m3.metric(t("👥 المنتظرون بالخارج", "👥 En attente"), len(waiting))
         
         st.divider()
@@ -403,6 +407,8 @@ elif st.session_state.current_view == 'secretary':
                     c.execute("UPDATE appointments SET status = 'في الفحص' WHERE id = ?", (int(next_id),))
                     c.execute("UPDATE clinic_settings SET current_ticket = ? WHERE id = 1", (int(next_t),))
                     st.success(f"تم نداء #{next_t}")
+                else:
+                    st.warning(t("لا يوجد مرضى في الانتظار حالياً.", "Aucun patient en attente."))
                 conn.commit(); st.rerun()
         with c_add:
             with st.form("walkin"):
@@ -442,6 +448,8 @@ elif st.session_state.current_view == 'doctor':
             today_str = get_tunis_date().isoformat()
             conn = get_connection()
             in_exam = pd.read_sql_query("SELECT * FROM appointments WHERE appointment_date = ? AND status = 'في الفحص'", conn, params=(today_str,))
+            
+            # تعديل مشابه هنا لتجنب نفس الخطأ في شاشة الطبيب
             def_n = in_exam.iloc[0]['patient_name'] if not in_exam.empty else ""
             def_p = in_exam.iloc[0]['patient_phone'] if not in_exam.empty else ""
             
