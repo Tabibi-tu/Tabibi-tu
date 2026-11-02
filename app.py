@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import streamlit.components.v1 as components
 import base64
+import html # للحماية من ثغرات XSS
 
 # محاولة استيراد مكتبة PostgreSQL للربط مع Neon عند توفرها
 try:
@@ -69,6 +70,8 @@ if 'doc_auth' not in st.session_state: st.session_state.doc_auth = False
 if 'lang' not in st.session_state: st.session_state.lang = 'ar'
 if 'patient_subview' not in st.session_state: st.session_state.patient_subview = 'book'
 if 'doctor_subview' not in st.session_state: st.session_state.doctor_subview = 'rx'
+# متغير لمنع التخمين العشوائي للرموز
+if 'login_attempts' not in st.session_state: st.session_state.login_attempts = 0
 
 def t(ar_text, fr_text):
     if st.session_state.lang == 'ar':
@@ -95,7 +98,7 @@ def format_wait_time(minutes):
         return res.strip()
 
 # ==========================================
-# 2. قاعدة البيانات (تدعم Neon PostgreSQL و SQLite)
+# 2. قاعدة البيانات (تدعم Neon PostgreSQL و SQLite) - تم التحسين
 # ==========================================
 DB_FILE = "clinic_saas.db"
 
@@ -111,76 +114,106 @@ def is_postgres():
     url = get_db_url()
     return bool(url and PSYCOPG2_AVAILABLE)
 
-def get_connection():
+# استخدام st.cache_resource لتقليل الاتصالات
+@st.cache_resource(ttl=600)
+def get_connection_pool():
     if is_postgres():
         return psycopg2.connect(get_db_url())
     return sqlite3.connect(DB_FILE, check_same_thread=False)
 
+def get_connection():
+    # في حالة SQLite نستخدم الاتصال المخزن مؤقتاً أو نفتح جديد
+    # في حالة Postgres نفضل فتح اتصال جديد وتنظيفه لضمان عدم حدوث Timeout، أو يمكن استخدام Pooling حقيقي.
+    if is_postgres():
+         return psycopg2.connect(get_db_url())
+    return sqlite3.connect(DB_FILE, check_same_thread=False)
+
 def execute_query(query, params=(), fetch=False):
     conn = get_connection()
-    if is_postgres():
-        query = query.replace("?", "%s").replace("AUTOINCREMENT", "")
-        if "INTEGER PRIMARY KEY" in query and "SERIAL" not in query and "CHECK" not in query:
-            query = query.replace("id INTEGER PRIMARY KEY", "id SERIAL PRIMARY KEY")
     c = conn.cursor()
-    c.execute(query, params)
-    res = c.fetchall() if fetch else None
-    conn.commit()
-    conn.close()
-    return res
+    try:
+        if is_postgres():
+            query = query.replace("?", "%s").replace("AUTOINCREMENT", "")
+            if "INTEGER PRIMARY KEY" in query and "SERIAL" not in query and "CHECK" not in query:
+                query = query.replace("id INTEGER PRIMARY KEY", "id SERIAL PRIMARY KEY")
+        
+        c.execute(query, params)
+        res = c.fetchall() if fetch else None
+        conn.commit()
+        return res
+    finally:
+        # إغلاق آمن دائماً
+        conn.close()
 
 def read_df(query, params=()):
     conn = get_connection()
-    if is_postgres():
-        query = query.replace("?", "%s")
-    df = pd.read_sql_query(query, conn, params=params)
-    conn.close()
-    return df
+    try:
+        if is_postgres():
+            query = query.replace("?", "%s")
+        df = pd.read_sql_query(query, conn, params=params)
+        return df
+    finally:
+        conn.close()
 
 def init_db():
+    # جدول الإعدادات الشامل
     execute_query('''CREATE TABLE IF NOT EXISTS clinic_settings (
-            id INTEGER PRIMARY KEY CHECK (id = 1), doctor_name TEXT, specialty TEXT, phone TEXT, address TEXT,
-            work_start TEXT, work_end TEXT, slot_minutes INTEGER, consultation_price INTEGER, current_ticket INTEGER,
-            subscription_active INTEGER, subscription_expiry TEXT, sec_pwd TEXT, doc_pwd TEXT, last_reset_date TEXT,
-            work_days TEXT, urgent_approver TEXT, absence_notice TEXT)''')
-    
-    # إضافة الأعمدة بشكل منفصل وآمن تماماً لمنع KeyError
-    new_settings_cols = [
-        ("sec_pwd", "TEXT DEFAULT '0000'"),
-        ("doc_pwd", "TEXT DEFAULT '0000'"),
-        ("last_reset_date", "TEXT DEFAULT ''"),
-        ("work_days", "TEXT DEFAULT '0,1,2,3,4,5'"),
-        ("urgent_approver", "TEXT DEFAULT 'both'"),
-        ("absence_notice", "TEXT DEFAULT ''")
-    ]
-    for col_name, col_def in new_settings_cols:
-        try:
-            execute_query(f"ALTER TABLE clinic_settings ADD COLUMN {col_name} {col_def}")
-        except Exception:
-            pass
+            id INTEGER PRIMARY KEY CHECK (id = 1), 
+            doctor_name TEXT DEFAULT 'سامي بن يوسف', 
+            specialty TEXT DEFAULT 'طب عام', 
+            phone TEXT DEFAULT '21600000000', 
+            address TEXT DEFAULT '',
+            work_start TEXT DEFAULT '09:00', 
+            work_end TEXT DEFAULT '16:00', 
+            slot_minutes INTEGER DEFAULT 20, 
+            consultation_price INTEGER DEFAULT 60, 
+            current_ticket INTEGER DEFAULT 0,
+            subscription_active INTEGER DEFAULT 1, 
+            subscription_expiry TEXT DEFAULT '2026-12-31', 
+            sec_pwd TEXT DEFAULT '0000', 
+            doc_pwd TEXT DEFAULT '0000', 
+            last_reset_date TEXT DEFAULT '',
+            work_days TEXT DEFAULT '0,1,2,3,4,5', 
+            urgent_approver TEXT DEFAULT 'both', 
+            absence_notice TEXT DEFAULT '')''')
 
+    # جدول المواعيد
     execute_query('''CREATE TABLE IF NOT EXISTS appointments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, patient_name TEXT, patient_phone TEXT, appointment_date TEXT, 
-            appointment_time TEXT, ticket_number INTEGER, status TEXT, visit_type TEXT, visit_reason TEXT,
-            urgent_note TEXT, created_at TEXT)''')
-    
-    for col_name, col_def in [("visit_reason", "TEXT DEFAULT 'غير محدد'"), ("urgent_note", "TEXT DEFAULT ''")]:
-        try:
-            execute_query(f"ALTER TABLE appointments ADD COLUMN {col_name} {col_def}")
-        except Exception:
-            pass
+            id INTEGER PRIMARY KEY AUTOINCREMENT, 
+            patient_name TEXT, 
+            patient_phone TEXT, 
+            appointment_date TEXT, 
+            appointment_time TEXT, 
+            ticket_number INTEGER, 
+            status TEXT, 
+            visit_type TEXT, 
+            visit_reason TEXT DEFAULT 'غير محدد',
+            urgent_note TEXT DEFAULT '', 
+            created_at TEXT)''')
+            
+    # فهرس فريد لمنع الحجز المكرر في نفس الموعد
+    try:
+        if is_postgres():
+             execute_query("CREATE UNIQUE INDEX IF NOT EXISTS uq_booked_slot ON appointments (appointment_date, appointment_time) WHERE visit_type = 'موعد مسبق' AND status <> 'ملغى'")
+        else:
+             execute_query("CREATE UNIQUE INDEX IF NOT EXISTS uq_booked_slot ON appointments (appointment_date, appointment_time) WHERE visit_type = 'موعد مسبق' AND status != 'ملغى'")
+    except Exception:
+        pass
 
+    # جدول الملفات
     execute_query('''CREATE TABLE IF NOT EXISTS medical_records (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, patient_phone TEXT, patient_name TEXT, visit_date TEXT, 
-            diagnosis TEXT, prescription TEXT, lab_tests TEXT, doctor_notes TEXT)''')
+            id INTEGER PRIMARY KEY AUTOINCREMENT, 
+            patient_phone TEXT, 
+            patient_name TEXT, 
+            visit_date TEXT, 
+            diagnosis TEXT, 
+            prescription TEXT, 
+            lab_tests TEXT, 
+            doctor_notes TEXT)''')
     
     count_res = execute_query("SELECT COUNT(*) FROM clinic_settings", fetch=True)
     if count_res and count_res[0][0] == 0:
-        execute_query('''INSERT INTO clinic_settings 
-            (id, doctor_name, specialty, phone, address, work_start, work_end, slot_minutes, consultation_price, 
-             current_ticket, subscription_active, subscription_expiry, sec_pwd, doc_pwd, last_reset_date, work_days, urgent_approver, absence_notice)
-            VALUES (1, 'سامي بن يوسف', 'أخصائي طب الأطفال وحديثي الولادة', '21655000111', 
-                'شارع الحبيب بورقيبة', '09:00', '16:00', 20, 60, 0, 1, '2026-12-31', '0000', '0000', '', '0,1,2,3,4,5', 'both', '')''')
+        execute_query('''INSERT INTO clinic_settings (id) VALUES (1)''')
 
 init_db()
 
@@ -189,7 +222,6 @@ def get_clinic_settings():
     if df.empty:
         return {}
     row_dict = df.iloc[0].to_dict()
-    # ضمان عدم وجود أي قيمة None أو عمود مفقود
     defaults = {
         'doctor_name': 'سامي بن يوسف', 'specialty': 'طب عام', 'phone': '21600000000',
         'work_start': '09:00', 'work_end': '16:00', 'slot_minutes': 20, 'consultation_price': 60,
@@ -242,10 +274,21 @@ def get_booked_slots(target_date):
     return [row[0] for row in res] if res else []
 
 def recalculate_tickets(target_date):
-    """إعادة ترتيب أرقام التذاكر منطقياً حسب وقت الموعد"""
-    df = read_df("SELECT id, appointment_time FROM appointments WHERE appointment_date = ? AND status NOT IN ('ملغى', 'طلب استعجالي') ORDER BY appointment_time ASC, id ASC", (target_date,))
-    for idx, row in enumerate(df.itertuples(), start=1):
-        execute_query("UPDATE appointments SET ticket_number = ? WHERE id = ?", (idx, int(row.id)))
+    """إعادة ترتيب أرقام التذاكر فقط لمن يحتاج ترتيب (المنتظرين) لضمان عدم تغيير ترتيب من تم فحصه"""
+    df = read_df("SELECT id, appointment_time, status FROM appointments WHERE appointment_date = ? AND status NOT IN ('ملغى', 'طلب استعجالي', 'مكتمل') ORDER BY appointment_time ASC, id ASC", (target_date,))
+    # البحث عن آخر رقم مستخدم اليوم
+    max_t = execute_query("SELECT MAX(ticket_number) FROM appointments WHERE appointment_date = ? AND status = 'مكتمل'", (target_date,), fetch=True)
+    start_idx = max_t[0][0] if max_t and max_t[0][0] else 0
+    
+    for i, row in enumerate(df.itertuples(), start=start_idx + 1):
+         execute_query("UPDATE appointments SET ticket_number = ? WHERE id = ?", (i, int(row.id)))
+
+def update_current_ticket(today_str):
+    """تحديث رقم current_ticket بناءً على المرضى المكتملين اليوم"""
+    res = execute_query("SELECT ticket_number FROM appointments WHERE appointment_date = ? AND status = 'مكتمل' ORDER BY ticket_number DESC LIMIT 1", (today_str,), fetch=True)
+    current = res[0][0] if res else 0
+    execute_query("UPDATE clinic_settings SET current_ticket = ? WHERE id = 1", (current,))
+    settings['current_ticket'] = current
 
 # ==========================================
 # 3. التصميم (CSS)
@@ -282,7 +325,7 @@ st.markdown(f"""<div class="clinic-header"><h1>{title_text}</h1><p>{settings.get
 
 # عرض إشعار الغياب أو التأجيل إن وجد
 if settings.get('absence_notice'):
-    st.warning(f"📢 **تنبيه من العيادة:** {settings.get('absence_notice')}")
+    st.warning(f"📢 **تنبيه من العيادة:** {html.escape(settings.get('absence_notice'))}")
 
 if settings.get('subscription_active', 1) == 0:
     st.error(t("⚠️ خدمة العيادة الرقمية معلقة مؤقتاً. يرجى من الإدارة تجديد الاشتراك.", "⚠️ Service suspendu temporairement."))
@@ -295,7 +338,7 @@ if st.session_state.current_view != 'home':
     st.divider()
 
 # ==============================================================================
-# دالة عرض الطلبات الاستعجالية المعلقة (للطبيب أو الكاتبة حسب الإعدادات)
+# دالة عرض الطلبات الاستعجالية المعلقة (مؤمنة بـ html.escape)
 # ==============================================================================
 def render_urgent_requests_box(role):
     approver_setting = settings.get('urgent_approver', 'both')
@@ -305,10 +348,14 @@ def render_urgent_requests_box(role):
     if not urgent_df.empty:
         st.markdown(t("### 🚨 طلبات مواعيد استعجالية تنتظر المصادقة", "### 🚨 Demandes urgentes en attente"))
         for _, u_row in urgent_df.iterrows():
+            safe_name = html.escape(str(u_row['patient_name']))
+            safe_phone = html.escape(str(u_row['patient_phone']))
+            safe_note = html.escape(str(u_row.get('urgent_note', 'حالة طارئة')))
+            
             st.markdown(f"""
             <div class="urgent-card">
-                <b style="color:#b91c1c; font-size:1.1rem;">🚨 المريض: {u_row['patient_name']} | 📞 {u_row['patient_phone']}</b><br>
-                <span>📅 التاريخ المطلوب: {u_row['appointment_date']} | 📝 السبب/الحالة: <b>{u_row.get('urgent_note', 'حالة طارئة')}</b></span>
+                <b style="color:#b91c1c; font-size:1.1rem;">🚨 المريض: {safe_name} | 📞 {safe_phone}</b><br>
+                <span>📅 التاريخ المطلوب: {u_row['appointment_date']} | 📝 السبب/الحالة: <b>{safe_note}</b></span>
             </div>
             """, unsafe_allow_html=True)
             ca1, ca2, ca3 = st.columns([1, 1, 1])
@@ -322,10 +369,11 @@ def render_urgent_requests_box(role):
                 execute_query("UPDATE appointments SET status = 'ملغى' WHERE id = ?", (int(u_row['id']),))
                 st.info(t("تم إلغاء الطلب.", "Demande refusée."))
                 st.rerun()
-            wa_num = str(u_row['patient_phone']).strip().replace(" ", "")
+            wa_num = safe_phone.replace(" ", "")
             if not wa_num.startswith("216") and len(wa_num) == 8:
                 wa_num = "216" + wa_num
-            ca3.markdown(f"<a href='https://wa.me/{wa_num}?text=مرحبا، تم قبول طلبكم الاستعجالي في عيادة د. {doc_clean_name}' target='_blank' style='display:inline-block; background:#22c55e; color:white; padding:10px 16px; border-radius:10px; text-decoration:none; font-weight:bold; text-align:center; width:100%;'>💬 إشعار واتساب</a>", unsafe_allow_html=True)
+            safe_doc_name = html.escape(doc_clean_name)
+            ca3.markdown(f"<a href='https://wa.me/{wa_num}?text=مرحبا، تم قبول طلبكم الاستعجالي في عيادة د. {safe_doc_name}' target='_blank' style='display:inline-block; background:#22c55e; color:white; padding:10px 16px; border-radius:10px; text-decoration:none; font-weight:bold; text-align:center; width:100%;'>💬 إشعار واتساب</a>", unsafe_allow_html=True)
         st.divider()
 
 # ==============================================================================
@@ -361,6 +409,8 @@ elif st.session_state.current_view == 'patient':
     @st.fragment(run_every=15)
     def live_queue_box():
         today_str = get_tunis_date().isoformat()
+        # تحديث current_ticket
+        update_current_ticket(today_str)
         today_df = read_df("SELECT * FROM appointments WHERE appointment_date = ? AND status NOT IN ('ملغى', 'طلب استعجالي') ORDER BY ticket_number ASC", (today_str,))
         
         waiting_count = len(today_df[today_df['status'] == 'في الانتظار'])
@@ -390,14 +440,16 @@ elif st.session_state.current_view == 'patient':
                 </div>
                 """, unsafe_allow_html=True)
             elif my_t > current_num: 
-                diff = my_t - current_num
-                wait_mins = diff * int(settings.get('slot_minutes', 20))
+                # استعلام ترتيب المريض الحي (لمعالجة الأرقام غير الثابتة)
+                my_t_order = read_df("SELECT COUNT(*) as cnt FROM appointments WHERE appointment_date = ? AND status = 'في الانتظار' AND ticket_number < ?", (today_str, my_t)).iloc[0]['cnt']
+                
+                wait_mins = my_t_order * int(settings.get('slot_minutes', 20))
                 formatted_time = format_wait_time(wait_mins)
                 
-                if diff == 1: patients_txt = t("مريض واحد فقط", "1 seul patient")
-                elif diff == 2: patients_txt = t("مريضان (2)", "2 patients")
-                elif 3 <= diff <= 10: patients_txt = t(f"{diff} مرضى", f"{diff} patients")
-                else: patients_txt = t(f"{diff} مريضاً", f"{diff} patients")
+                if my_t_order == 1: patients_txt = t("مريض واحد فقط", "1 seul patient")
+                elif my_t_order == 2: patients_txt = t("مريضان (2)", "2 patients")
+                elif 3 <= my_t_order <= 10: patients_txt = t(f"{my_t_order} مرضى", f"{my_t_order} patients")
+                else: patients_txt = t(f"{my_t_order} مريضاً", f"{my_t_order} patients")
 
                 st.markdown(f"""
                 <div style="background: linear-gradient(135deg, #f0fdfa, #f8fafc); border: 2px solid #0d9488; border-radius: 14px; padding: 18px; margin-top: 10px; text-align: center;">
@@ -472,14 +524,17 @@ elif st.session_state.current_view == 'patient':
             
             if st.button(t("✅ تأكيد الحجز", "✅ Confirmer le rendez-vous"), type="primary", use_container_width=True):
                 if is_work_day and sel_time and p_n.strip() and p_p.strip():
-                    execute_query('''INSERT INTO appointments 
-                        (patient_name, patient_phone, appointment_date, appointment_time, ticket_number, status, visit_type, visit_reason, created_at) 
-                        VALUES (?, ?, ?, ?, 0, 'في الانتظار', 'موعد مسبق', ?, ?)''',
-                        (p_n.strip(), p_p.strip(), sel_date.isoformat(), sel_time, sel_reason, get_tunis_time().strftime("%Y-%m-%d %H:%M")))
-                    recalculate_tickets(sel_date.isoformat())
-                    my_row = read_df("SELECT ticket_number FROM appointments WHERE patient_phone = ? AND appointment_date = ? AND appointment_time = ? ORDER BY id DESC", (p_p.strip(), sel_date.isoformat(), sel_time))
-                    my_t_num = my_row.iloc[0]['ticket_number'] if not my_row.empty else 1
-                    st.success(t(f"✅ تم الحجز بنجاح! رقمك في الصف هو #{my_t_num} ليوم {sel_date} الساعة {sel_time}.", f"✅ Réservé ! Votre numéro est #{my_t_num} pour le {sel_date} à {sel_time}."))
+                    try:
+                        execute_query('''INSERT INTO appointments 
+                            (patient_name, patient_phone, appointment_date, appointment_time, ticket_number, status, visit_type, visit_reason, created_at) 
+                            VALUES (?, ?, ?, ?, 0, 'في الانتظار', 'موعد مسبق', ?, ?)''',
+                            (p_n.strip(), p_p.strip(), sel_date.isoformat(), sel_time, sel_reason, get_tunis_time().strftime("%Y-%m-%d %H:%M")))
+                        recalculate_tickets(sel_date.isoformat())
+                        my_row = read_df("SELECT ticket_number FROM appointments WHERE patient_phone = ? AND appointment_date = ? AND appointment_time = ? ORDER BY id DESC", (p_p.strip(), sel_date.isoformat(), sel_time))
+                        my_t_num = my_row.iloc[0]['ticket_number'] if not my_row.empty else 1
+                        st.success(t(f"✅ تم الحجز بنجاح! رقمك في الصف هو #{my_t_num} ليوم {sel_date} الساعة {sel_time}.", f"✅ Réservé ! Votre numéro est #{my_t_num} pour le {sel_date} à {sel_time}."))
+                    except Exception:
+                        st.error(t("عذراً، هذا الموعد تم حجزه للتو. يرجى اختيار وقت آخر.", "Désolé, cet horaire vient d'être réservé."))
                 else:
                     st.warning(t("يرجى التأكد من اختيار يوم عمل، وقت متاح، وإدخال الاسم ورقم الهاتف.", "Veuillez remplir tous les champs obligatoires."))
 
@@ -508,37 +563,52 @@ elif st.session_state.current_view == 'patient':
         st.markdown(t("#### 💊 أدخل بياناتك للاطلاع على وصفاتك الطبية وتتبع مواعيدك", "#### 💊 Entrez vos données pour voir vos ordonnances et rendez-vous"))
         c_p1, c_p2 = st.columns(2)
         search_phone = c_p1.text_input(t("رقم الهاتف:", "Téléphone :"), key="search_ph")
-        search_name = c_p2.text_input(t("اسم المريض (اختياري للتفريق بين أفراد العائلة):", "Nom du patient (Optionnel) :"), key="search_nm")
+        # جعل الاسم إجبارياً للبحث (حماية)
+        search_name = c_p2.text_input(t("اسم المريض (إجباري للمطابقة):", "Nom du patient (Obligatoire) :"), key="search_nm")
         
         if st.button(t("🔍 بحث وعرض", "🔍 Rechercher"), type="primary"):
-            if search_phone.strip():
-                # عرض المواعيد القادمة أو الطلبات الاستعجالية
-                app_df = read_df("SELECT * FROM appointments WHERE patient_phone = ? AND patient_name LIKE ? ORDER BY appointment_date DESC, id DESC LIMIT 5", (search_phone.strip(), f"%{search_name.strip()}%"))
+            if search_phone.strip() and search_name.strip():
+                # بحث غير حساس لحالة الأحرف
+                if is_postgres():
+                    app_query = "SELECT * FROM appointments WHERE patient_phone = %s AND patient_name ILIKE %s ORDER BY appointment_date DESC, id DESC LIMIT 5"
+                    rec_query = "SELECT * FROM medical_records WHERE patient_phone = %s AND patient_name ILIKE %s ORDER BY id DESC"
+                else:
+                    app_query = "SELECT * FROM appointments WHERE patient_phone = ? AND LOWER(patient_name) LIKE LOWER(?) ORDER BY appointment_date DESC, id DESC LIMIT 5"
+                    rec_query = "SELECT * FROM medical_records WHERE patient_phone = ? AND LOWER(patient_name) LIKE LOWER(?) ORDER BY id DESC"
+                
+                app_df = read_df(app_query, (search_phone.strip(), f"%{search_name.strip()}%"))
+                
                 if not app_df.empty:
                     st.markdown(t("##### 📅 حالة مواعيدك وطلباتك الأخيرة:", "##### 📅 Statut de vos rendez-vous :"))
                     for _, a_row in app_df.iterrows():
                         st_badge = a_row['status']
                         t_num = f"#{a_row['ticket_number']}" if int(a_row['ticket_number']) > 0 else t("ينتظر المصادقة", "En attente")
-                        st.info(f"👤 **{a_row['patient_name']}** | 📅 التاريخ: **{a_row['appointment_date']}** ({a_row['appointment_time']}) | 🎫 التذكرة: **{t_num}** | 📌 الحالة: **{st_badge}** ({a_row.get('visit_reason', '')})")
+                        safe_p_name = html.escape(str(a_row['patient_name']))
+                        st.info(f"👤 **{safe_p_name}** | 📅 التاريخ: **{a_row['appointment_date']}** ({a_row['appointment_time']}) | 🎫 التذكرة: **{t_num}** | 📌 الحالة: **{st_badge}** ({a_row.get('visit_reason', '')})")
                 
-                # عرض الوصفات الطبية
-                rec_df = read_df("SELECT * FROM medical_records WHERE patient_phone = ? AND patient_name LIKE ? ORDER BY id DESC", (search_phone.strip(), f"%{search_name.strip()}%"))
+                rec_df = read_df(rec_query, (search_phone.strip(), f"%{search_name.strip()}%"))
                 if not rec_df.empty:
                     st.markdown(t("##### 💊 الوصفات الطبية المسجلة:", "##### 💊 Ordonnances enregistrées :"))
                     for _, row in rec_df.iterrows():
+                        safe_r_name = html.escape(str(row['patient_name']))
+                        safe_diag = html.escape(str(row['diagnosis'])) if row['diagnosis'] else ''
+                        safe_rx = html.escape(str(row['prescription'])) if row['prescription'] else ''
+                        safe_lab = html.escape(str(row['lab_tests'])) if row['lab_tests'] else ''
+                        safe_notes = html.escape(str(row['doctor_notes'])) if row['doctor_notes'] else ''
+
                         st.markdown(f"""
                         <div class="medical-card">
-                            <span style="background:#ccfbf1; padding:4px 10px; border-radius:10px; font-weight:bold; color:#0f766e;">📅 {row['visit_date']} | المريض: {row['patient_name']}</span>
-                            <p style="margin-top:15px; font-size:1.1rem;"><b>🩺 {t("التشخيص:", "Diagnostic :")}</b> {row['diagnosis']}</p>
-                            <div style="background:#f0fdf4; padding:12px; border-radius:8px; border:1px dashed #16a34a;"><b>💊 {t("الوصفة:", "Ordonnance :")}</b><br>{row['prescription']}</div>
-                            <div style="background:#eff6ff; padding:12px; border-radius:8px; border:1px dashed #2563eb; margin-top:8px;"><b>🔬 {t("التحاليل:", "Analyses :")}</b><br>{row['lab_tests']}</div>
-                            <div style="background:#fef3c7; padding:12px; border-radius:8px; border:1px dashed #d97706; margin-top:12px;"><b style="color:#b45309;">📌 {t("ملاحظات وتوصيات الطبيب:", "Notes et recommandations :")}</b><br><span style="color:#92400e;">{row['doctor_notes']}</span></div>
+                            <span style="background:#ccfbf1; padding:4px 10px; border-radius:10px; font-weight:bold; color:#0f766e;">📅 {row['visit_date']} | المريض: {safe_r_name}</span>
+                            <p style="margin-top:15px; font-size:1.1rem;"><b>🩺 {t("التشخيص:", "Diagnostic :")}</b> {safe_diag}</p>
+                            <div style="background:#f0fdf4; padding:12px; border-radius:8px; border:1px dashed #16a34a;"><b>💊 {t("الوصفة:", "Ordonnance :")}</b><br>{safe_rx}</div>
+                            <div style="background:#eff6ff; padding:12px; border-radius:8px; border:1px dashed #2563eb; margin-top:8px;"><b>🔬 {t("التحاليل:", "Analyses :")}</b><br>{safe_lab}</div>
+                            <div style="background:#fef3c7; padding:12px; border-radius:8px; border:1px dashed #d97706; margin-top:12px;"><b style="color:#b45309;">📌 {t("ملاحظات وتوصيات الطبيب:", "Notes et recommandations :")}</b><br><span style="color:#92400e;">{safe_notes}</span></div>
                         </div>
                         """, unsafe_allow_html=True)
                 elif app_df.empty:
-                    st.warning(t("لا توجد مواعيد أو وصفات طبية مسجلة بهذا الرقم.", "Aucun dossier trouvé."))
+                    st.warning(t("لا توجد مواعيد أو وصفات طبية مطابقة.", "Aucun dossier trouvé."))
             else:
-                st.warning(t("الرجاء إدخال رقم الهاتف.", "Veuillez entrer le numéro de téléphone."))
+                st.warning(t("الرجاء إدخال رقم الهاتف واسم المريض للمطابقة.", "Veuillez entrer le téléphone et le nom."))
 
 # ==============================================================================
 # واجهة الكاتبة (إدارة الصف بالكامل + إضافة وتعديل + مصادقة الاستعجالي)
@@ -550,10 +620,14 @@ elif st.session_state.current_view == 'secretary':
             st.markdown(t("<h3 style='text-align:center;'>🔒 تسجيل دخول الكاتبة</h3>", "<h3 style='text-align:center;'>🔒 Connexion Secrétaire</h3>"), unsafe_allow_html=True)
             sec_pwd = st.text_input(t("رمز الدخول:", "Mot de passe :"), type="password")
             if st.button(t("دخول", "Connexion"), use_container_width=True, type="primary"):
-                if sec_pwd == str(settings.get('sec_pwd', '0000')):
+                if st.session_state.login_attempts >= 4:
+                     st.error(t("تجاوزت عدد المحاولات، حاول لاحقاً.", "Trop de tentatives."))
+                elif sec_pwd == str(settings.get('sec_pwd', '0000')):
                     st.session_state.sec_auth = True
+                    st.session_state.login_attempts = 0
                     st.rerun()
                 else:
+                    st.session_state.login_attempts += 1
                     st.error(t("الرمز غير صحيح!", "Mot de passe incorrect !"))
     else:
         st.subheader(t("👩‍💻 شاشة الكاتبة وإدارة الصف", "👩‍💻 Écran Secrétaire & Gestion de la file"))
@@ -563,7 +637,6 @@ elif st.session_state.current_view == 'secretary':
             execute_query("UPDATE clinic_settings SET current_ticket = 0, last_reset_date = ? WHERE id = 1", (today_str,))
             settings['current_ticket'] = 0
             
-        # عرض الطلبات الاستعجالية إن كانت الكاتبة مخولة
         render_urgent_requests_box('secretary')
             
         today_df = read_df("SELECT * FROM appointments WHERE appointment_date = ? AND status NOT IN ('ملغى', 'طلب استعجالي') ORDER BY ticket_number ASC, appointment_time ASC", (today_str,))
@@ -572,8 +645,8 @@ elif st.session_state.current_view == 'secretary':
         waiting = today_df[today_df['status'] == 'في الانتظار']
         
         m1, m2, m3 = st.columns(3)
-        current_patient_display = f"#{in_exam.iloc[0]['ticket_number']} - {in_exam.iloc[0]['patient_name']}" if not in_exam.empty else t("لا أحد", "Aucun")
-        next_patient_display = f"#{waiting.iloc[0]['ticket_number']} - {waiting.iloc[0]['patient_name']}" if not waiting.empty else t("فارغ", "Vide")
+        current_patient_display = f"#{in_exam.iloc[0]['ticket_number']} - {html.escape(str(in_exam.iloc[0]['patient_name']))}" if not in_exam.empty else t("لا أحد", "Aucun")
+        next_patient_display = f"#{waiting.iloc[0]['ticket_number']} - {html.escape(str(waiting.iloc[0]['patient_name']))}" if not waiting.empty else t("فارغ", "Vide")
         
         m1.metric(t("🟢 في الفحص الآن", "🟢 En consultation"), current_patient_display)
         m2.metric(t("🟡 القادم في الصف", "🟡 Prochain patient"), next_patient_display)
@@ -589,7 +662,7 @@ elif st.session_state.current_view == 'secretary':
                     next_id = int(waiting.iloc[0]['id'])
                     next_t = int(waiting.iloc[0]['ticket_number'])
                     execute_query("UPDATE appointments SET status = 'في الفحص' WHERE id = ?", (next_id,))
-                    execute_query("UPDATE clinic_settings SET current_ticket = ? WHERE id = 1", (next_t,))
+                    update_current_ticket(today_str)
                     st.success(f"تم نداء #{next_t}")
                 else:
                     st.warning(t("لا يوجد مرضى في الانتظار حالياً.", "Aucun patient en attente."))
@@ -609,15 +682,16 @@ elif st.session_state.current_view == 'secretary':
                         (patient_name, patient_phone, appointment_date, appointment_time, ticket_number, status, visit_type, visit_reason, created_at) 
                         VALUES (?, ?, ?, ?, ?, 'في الانتظار', 'حضور مباشر', ?, ?)''',
                         (w_n.strip(), w_p.strip(), today_str, current_time_str, new_t, w_reason, get_tunis_time().strftime("%Y-%m-%d %H:%M")))
+                    recalculate_tickets(today_str)
                     st.rerun()
 
         st.divider()
-        # جدول إدارة وتعديل الصف للكاتبة
         st.subheader(t("📋 إدارة وتعديل الصف لليوم (تقديم، تأخير، أو إلغاء)", "📋 Gérer et modifier la file d'aujourd'hui"))
         all_today_df = read_df("SELECT * FROM appointments WHERE appointment_date = ? ORDER BY ticket_number ASC, id ASC", (today_str,))
         if not all_today_df.empty:
             for _, p_row in all_today_df.iterrows():
-                with st.expander(f"🎫 #{p_row['ticket_number']} | 👤 {p_row['patient_name']} | 🕒 {p_row['appointment_time']} | 📌 {p_row['status']} ({p_row.get('visit_reason', '')})"):
+                safe_name = html.escape(str(p_row['patient_name']))
+                with st.expander(f"🎫 #{p_row['ticket_number']} | 👤 {safe_name} | 🕒 {p_row['appointment_time']} | 📌 {p_row['status']} ({p_row.get('visit_reason', '')})"):
                     ec1, ec2, ec3, ec4 = st.columns([1, 1, 1, 1])
                     new_t_num = ec1.number_input(t("رقم التذكرة (الترتيب):", "N° Ticket :"), min_value=0, value=int(p_row['ticket_number']), key=f"tnum_{p_row['id']}")
                     status_opts = ['في الانتظار', 'في الفحص', 'مكتمل', 'ملغى', 'طلب استعجالي']
@@ -628,8 +702,8 @@ elif st.session_state.current_view == 'secretary':
                     if ec4.button(t("💾 حفظ التعديل", "💾 Enregistrer"), key=f"sv_{p_row['id']}", type="primary"):
                         execute_query("UPDATE appointments SET ticket_number = ?, status = ?, appointment_time = ? WHERE id = ?",
                                       (int(new_t_num), new_status, new_time.strip(), int(p_row['id'])))
-                        if new_status == 'في الفحص':
-                            execute_query("UPDATE clinic_settings SET current_ticket = ? WHERE id = 1", (int(new_t_num),))
+                        if new_status == 'في الفحص' or new_status == 'مكتمل':
+                            update_current_ticket(today_str)
                         st.success(t("تم تحديث بيانات المريض في الصف!", "Mis à jour !"))
                         st.rerun()
         else:
@@ -645,13 +719,16 @@ elif st.session_state.current_view == 'doctor':
             st.markdown(t("<h3 style='text-align:center;'>🔒 تسجيل دخول الطبيب</h3>", "<h3 style='text-align:center;'>🔒 Connexion Médecin</h3>"), unsafe_allow_html=True)
             doc_pwd = st.text_input(t("رمز الدخول:", "Mot de passe :"), type="password", key="doc_login_pwd")
             if st.button(t("دخول", "Connexion"), use_container_width=True, type="primary"):
-                if doc_pwd == str(settings.get('doc_pwd', '0000')):
+                if st.session_state.login_attempts >= 4:
+                     st.error(t("تجاوزت عدد المحاولات، حاول لاحقاً.", "Trop de tentatives."))
+                elif doc_pwd == str(settings.get('doc_pwd', '0000')):
                     st.session_state.doc_auth = True
+                    st.session_state.login_attempts = 0
                     st.rerun()
                 else:
+                    st.session_state.login_attempts += 1
                     st.error(t("الرمز غير صحيح!", "Mot de passe incorrect !"))
     else:
-        # عرض الطلبات الاستعجالية للطبيب إن كان مخولاً
         render_urgent_requests_box('doctor')
 
         c_nav1, c_nav2 = st.columns(2)
@@ -676,7 +753,8 @@ elif st.session_state.current_view == 'doctor':
             c_info, c_hist, c_rev = st.columns([2, 1, 1])
             with c_info:
                 if def_n:
-                    st.success(t(f"🟢 المريض الحالي: {def_n} | التذكرة: #{in_exam.iloc[0]['ticket_number']} | ({def_reason})", f"🟢 Patient actuel: {def_n}"))
+                    safe_dn = html.escape(str(def_n))
+                    st.success(t(f"🟢 المريض الحالي: {safe_dn} | التذكرة: #{in_exam.iloc[0]['ticket_number']} | ({def_reason})", f"🟢 Patient actuel: {safe_dn}"))
                 else:
                     st.info(t("لا يوجد مريض في قاعة الفحص حالياً.", "Aucun patient en salle d'examen."))
             with c_hist:
@@ -687,7 +765,6 @@ elif st.session_state.current_view == 'doctor':
                 est_rev = int(completed_today) * int(settings.get('consultation_price', 60))
                 st.metric(t("💼 فحوصات مكتملة اليوم", "💼 Consultations"), f"{completed_today} ({est_rev} DT)")
 
-            # قوالب الوصفات السريعة
             templates = {
                 t("-- اختر قالباً سريعاً (اختياري) --", "-- Modèle rapide --"): ("", "", ""),
                 t("نزلة برد / التهاب حلق عادي", "Grippe / Pharyngite"): ("التهاب فيروسي بالحلق", "Paracétamol 1000mg (1x3/j)\nVitamine C 1000mg (1/j)", "الراحة وشرب السوائل الدافئة"),
@@ -698,39 +775,54 @@ elif st.session_state.current_view == 'doctor':
             tpl_diag, tpl_rx, tpl_notes = templates[sel_tpl]
 
             with st.form("rx"):
+                st.caption("ملاحظة: الاسم ورقم الهاتف فقط ضروريان، باقي الحقول اختيارية.")
                 col1, col2 = st.columns(2)
                 d_n = col1.text_input(t("اسم المريض:", "Nom du patient :"), value=def_n)
                 d_p = col2.text_input(t("رقم الهاتف (ليرى المريض وصفته):", "Téléphone :"), value=def_p)
-                d_diag = st.text_input(t("🩺 التشخيص (Diagnostic):", "🩺 Diagnostic :"), value=tpl_diag)
+                d_diag = st.text_input(t("🩺 التشخيص (Diagnostic) [اختياري]:", "🩺 Diagnostic [Optionnel] :"), value=tpl_diag)
                 
                 c_rx, c_lab = st.columns(2)
-                d_rx = c_rx.text_area(t("💊 الوصفة (Ordonnance):", "💊 Ordonnance :"), value=tpl_rx, height=150)
-                d_lab = c_lab.text_area(t("🔬 التحاليل (Analyses):", "🔬 Analyses :"), height=150)
-                d_notes = st.text_input(t("📌 ملاحظات وتوصيات للمريض:", "📌 Notes pour le patient :"), value=tpl_notes)
+                d_rx = c_rx.text_area(t("💊 الوصفة (Ordonnance) [اختياري]:", "💊 Ordonnance [Optionnel] :"), value=tpl_rx, height=150)
+                d_lab = c_lab.text_area(t("🔬 التحاليل (Analyses) [اختياري]:", "🔬 Analyses [Optionnel] :"), height=150)
+                d_notes = st.text_input(t("📌 ملاحظات وتوصيات للمريض [اختياري]:", "📌 Notes [Optionnel] :"), value=tpl_notes)
                 
-                if st.form_submit_button(t("💾 حفظ في ملف المريض الدائم", "💾 Enregistrer le dossier"), type="primary"):
+                if st.form_submit_button(t("💾 حفظ الملف وإكمال الفحص", "💾 Enregistrer le dossier"), type="primary"):
                     if d_n.strip() and d_p.strip():
+                        # حفظ الملف الطبي (حتى لو كانت باقي الحقول فارغة)
                         execute_query("INSERT INTO medical_records (patient_phone, patient_name, visit_date, diagnosis, prescription, lab_tests, doctor_notes) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                                      (d_p.strip(), d_n.strip(), today_str, d_diag, d_rx, d_lab, d_notes))
-                        st.success(t("✅ تم حفظ الوصفة والتحاليل الدائمة للمريض!", "✅ Dossier enregistré avec succès !"))
+                                      (d_p.strip(), d_n.strip(), today_str, d_diag.strip(), d_rx.strip(), d_lab.strip(), d_notes.strip()))
+                        
+                        # تحديث حالة الموعد إلى مكتمل
+                        if not in_exam.empty:
+                            execute_query("UPDATE appointments SET status = 'مكتمل' WHERE id = ?", (int(in_exam.iloc[0]['id']),))
+                            update_current_ticket(today_str)
+                            
+                        st.success(t("✅ تم حفظ الملف الطبي للمريض بنجاح!", "✅ Dossier enregistré avec succès !"))
                     else:
-                        st.error(t("الاسم ورقم الهاتف ضروريان.", "Le nom et le téléphone sont obligatoires."))
+                        st.error(t("الاسم ورقم الهاتف ضروريان לחفظ الملف.", "Le nom et le téléphone sont obligatoires."))
             
             st.markdown("---")
-            if d_n and d_rx:
+            if d_n and d_rx.strip():
+                # إعداد نصوص آمنة للطباعة
+                safe_js_name = d_n.replace("'", "\\'").replace('"', '\\"')
+                safe_js_rx = d_rx.replace("'", "\\'").replace('"', '\\"').replace("\n", "\\n")
+                safe_doc_name = doc_clean_name.replace("'", "\\'").replace('"', '\\"')
+                
                 print_html = f"""
                 <script>
                 function printRx() {{
-                    const rxWindow = window.open('', '', 'width=800,height=600');
-                    rxWindow.document.write('<html><head><title>وصفة طبية</title><style>body{{font-family: Arial, sans-serif; direction: rtl; padding: 40px;}} .header{{text-align: center; border-bottom: 2px solid #000; padding-bottom: 10px; margin-bottom: 30px;}} .patient{{margin-bottom: 30px; font-weight: bold;}} .rx-body{{min-height: 300px; font-size: 18px; line-height: 1.8;}}</style></head><body>');
-                    rxWindow.document.write('<div class="header"><h2>د. {doc_clean_name}</h2><p>{settings.get("specialty", "")}</p></div>');
-                    rxWindow.document.write('<div class="patient">التاريخ: {today_str} <br> اسم المريض: {d_n}</div>');
-                    rxWindow.document.write('<div class="rx-body"><h3>الوصفة الطبية:</h3><pre style="font-family: Arial; font-size: 18px;">{d_rx}</pre></div>');
-                    rxWindow.document.write('<div style="text-align:center; margin-top:50px;">إمضاء وختم الطبيب</div>');
-                    rxWindow.document.write('</body></html>');
-                    rxWindow.document.close();
-                    rxWindow.focus();
-                    setTimeout(function() {{ rxWindow.print(); rxWindow.close(); }}, 250);
+                    try {{
+                        const rxWindow = window.open('', '', 'width=800,height=600');
+                        rxWindow.document.write('<html><head><title>وصفة طبية</title><style>body{{font-family: Arial, sans-serif; direction: rtl; padding: 40px;}} .header{{text-align: center; border-bottom: 2px solid #000; padding-bottom: 10px; margin-bottom: 30px;}} .patient{{margin-bottom: 30px; font-weight: bold;}} .rx-body{{min-height: 300px; font-size: 18px; line-height: 1.8;}}</style></head><body>');
+                        rxWindow.document.write('<div class="header"><h2>د. {safe_doc_name}</h2><p>{settings.get("specialty", "")}</p></div>');
+                        rxWindow.document.write('<div class="patient">التاريخ: {today_str} <br> اسم المريض: {safe_js_name}</div>');
+                        rxWindow.document.write('<div class="rx-body"><h3>الوصفة الطبية:</h3><pre style="font-family: Arial; font-size: 18px;">{safe_js_rx}</pre></div>');
+                        rxWindow.document.write('<div style="text-align:center; margin-top:50px;">إمضاء وختم الطبيب</div>');
+                        rxWindow.document.write('</body></html>');
+                        rxWindow.document.close();
+                        rxWindow.focus();
+                        setTimeout(function() {{ rxWindow.print(); rxWindow.close(); }}, 250);
+                    }} catch (e) {{ alert("حدث خطأ في الطباعة. تأكد من عدم وجود رموز غريبة في الوصفة."); }}
                 }}
                 </script>
                 <button onclick="printRx()" style="background-color: #0f766e; color: white; padding: 10px 20px; border: none; border-radius: 8px; cursor: pointer; font-size: 16px; font-weight: bold; width: 100%;">🖨️ طباعة الوصفة الآن (مباشرة للطابعة)</button>
@@ -766,7 +858,7 @@ elif st.session_state.current_view == 'doctor':
                     format_func=lambda x: approver_map[x]
                 )
 
-                new_price = st.number_input(t("💰 تعريفة العيادة التقديرية (لحساب المداخيل بالدينار):", "💰 Tarif consultation (DT) :"), min_value=0, value=int(settings.get('consultation_price', 60)))
+                new_price = st.number_input(t("💰 تعريفة العيادة التقديرية [اختياري]:", "💰 Tarif consultation [Optionnel]:"), min_value=0, value=int(settings.get('consultation_price', 60)))
                 
                 st.subheader(t("🔒 أرقام الدخول السرية", "🔒 Mots de passe d'accès"))
                 cp1, cp2 = st.columns(2)
@@ -783,7 +875,6 @@ elif st.session_state.current_view == 'doctor':
                     st.rerun()
 
             st.divider()
-            # قسم إعلان الغياب والتأجيل الأوتوماتيكي للمواعيد
             st.markdown(t("### 📆 إعلام بالغياب وتأجيل المواعيد أوتوماتيكياً", "### 📆 Déclarer une absence et reporter automatiquement"))
             st.info(t("عند إعلان الغياب ليوم معين، سيقوم النظام أوتوماتيكياً بترحيل جميع مواعيد ذلك اليوم إلى يوم العمل الجديد الذي تختاره، مع نشر تنبيه للمرضى.", "Les rendez-vous seront automatiquement déplacés."))
             with st.form("absence_postpone_form"):
@@ -800,8 +891,11 @@ elif st.session_state.current_view == 'doctor':
                     abs_str = abs_date.isoformat()
                     target_str = new_target_date.isoformat()
                     affected = read_df("SELECT COUNT(*) as cnt FROM appointments WHERE appointment_date = ? AND status = 'في الانتظار'", (abs_str,)).iloc[0]['cnt']
-                    execute_query("UPDATE appointments SET appointment_date = ? WHERE appointment_date = ? AND status = 'في الانتظار'", (target_str, abs_str))
+                    
+                    # تعديل الوقت كـ "مرحل" لتجنب تعارض الـ UNIQUE INDEX
+                    execute_query("UPDATE appointments SET appointment_date = ?, appointment_time = 'مرحّل' WHERE appointment_date = ? AND status = 'في الانتظار'", (target_str, abs_str))
                     recalculate_tickets(target_str)
+                    
                     notice_msg = custom_notice.strip() if custom_notice.strip() else f"تم تأجيل مواعيد يوم {abs_str} تلقائياً إلى يوم {target_str} بسبب غياب طارئ."
                     execute_query("UPDATE clinic_settings SET absence_notice = ? WHERE id = 1", (notice_msg,))
                     st.success(t(f"✅ تم ترحيل {affected} موعداً بنجاح من يوم {abs_str} إلى يوم {target_str} وتحديث أرقام الصف!", f"✅ {affected} rendez-vous reportés !"))
