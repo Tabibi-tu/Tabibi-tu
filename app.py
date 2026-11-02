@@ -59,7 +59,9 @@ if 'patient_subview' not in st.session_state: st.session_state.patient_subview =
 if 'doctor_subview' not in st.session_state: st.session_state.doctor_subview = 'rx'
 
 def t(ar_text, fr_text):
-    return ar_text if st.session_state.lang == 'ar' else fr_text
+    if st.session_state.lang == 'ar':
+        return ar_text.replace("طابور", "صف")
+    return fr_text
 
 # تنسيق الوقت التقريبي بذكاء
 def format_wait_time(minutes):
