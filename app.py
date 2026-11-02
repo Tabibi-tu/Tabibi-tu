@@ -473,7 +473,11 @@ elif st.session_state.current_view == 'patient':
             
         with col_q2:
             st.markdown(t("#### ⏳ وقت الانتظار التقريبي", "#### ⏳ Temps d'attente estimé"))
-            my_code = st.text_input(t("أدخل رمز موعدك (مثال C-592):", "Code de rendez-vous :"), key="patient_code_input").strip().upper()
+            my_code = st.text_input(t("أدخل رمز موعدك (مثال C59):", "Code de rendez-vous (ex: C59) :"), key="patient_code_input").strip().upper()
+            
+            if my_code:
+                # البحث غير حساس لحالة الأحرف (يقرأ الحروف الكبيرة والصغيرة بنفس الطريقة)
+                my_row = read_df("SELECT * FROM appointments WHERE appointment_date = ? AND UPPER(app_code) = ?", (today_str, my_code))
             
             if my_code:
                 my_row = read_df("SELECT * FROM appointments WHERE appointment_date = ? AND app_code = ?", (today_str, my_code))
