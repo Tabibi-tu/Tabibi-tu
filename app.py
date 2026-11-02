@@ -296,7 +296,7 @@ elif st.session_state.current_view == 'patient':
                     st.warning(t("يرجى التأكد من إدخال الاسم ورقم الهاتف واختيار الوقت.", "Veuillez entrer le nom, le téléphone et choisir une heure."))
 
     elif st.session_state.patient_subview == 'records':
-        st.markdown(t("#### 💊 أدخل بياناتك للاطلاع على ملفك الطبي", "#### 💊 Entrez vos données pour voir votre dossier"))
+        st.markdown(t("#### 💊 أدخل بياناتك للاطلاع على وصفاتك الطبية", "#### 💊 Entrez vos données pour voir vos ordonnances"))
         c_p1, c_p2 = st.columns(2)
         search_phone = c_p1.text_input(t("رقم الهاتف:", "Téléphone :"), key="search_ph")
         search_name = c_p2.text_input(t("اسم المريض (للتفريق بين ملفات العائلة):", "Nom du patient :"), key="search_nm")
