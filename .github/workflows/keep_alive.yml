@@ -1,0 +1,12 @@
+name: Keep Streamlit App Alive
+on:
+  schedule:
+    - cron: '*/15 * * * *' # يعمل كل 15 دقيقة
+  workflow_dispatch:
+
+jobs:
+  keep-alive:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Streamlit App
+        run: curl -s -o /dev/null -w "%{http_code}" https://https://dr-tabibi.streamlit.app
